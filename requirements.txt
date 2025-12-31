@@ -1,4 +1,6 @@
-ultralytics
-opencv-python-headless
 streamlit
+opencv-python-headless
 numpy
+ultralytics
+Pillow
+PyYAML
