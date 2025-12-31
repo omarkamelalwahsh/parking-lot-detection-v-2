@@ -105,17 +105,13 @@ def save_image(path, img_bgr):
     cv2.imwrite(path, img_bgr)
 
 
-def save_video_from_frames(path, frames_bgr, fps=25):
-    ensure_dir(os.path.dirname(path))
-    if not frames_bgr:
-        return False
-    h, w = frames_bgr[0].shape[:2]
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(path, fourcc, fps, (w, h))
-    for f in frames_bgr:
-        out.write(f)
-    out.release()
-    return True
+def get_file_type(filename: str):
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in [".png", ".jpg", ".jpeg", ".bmp"]:
+        return "image"
+    if ext in [".mp4", ".avi", ".mov", ".mkv"]:
+        return "video"
+    return None
 
 
 # =========================
@@ -139,16 +135,30 @@ st.sidebar.header("Settings")
 conf_threshold = st.sidebar.slider("Confidence threshold", 0.05, 0.95, 0.5, 0.05)
 save_outputs = st.sidebar.checkbox("Save outputs to outputs/", value=True)
 
-mode = st.sidebar.radio("Choose input type", ["Image", "Video"])
+st.sidebar.markdown("---")
+st.sidebar.info("Upload an image or a video. The app will detect the file type automatically.")
 
 # =========================
-# ✅ Image Mode
+# ✅ ONE Upload (Image or Video)
 # =========================
-if mode == "Image":
-    uploaded_img = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg", "bmp"])
-    if uploaded_img is not None:
-        input_name = uploaded_img.name
-        img_bgr = read_uploaded_image(uploaded_img)
+uploaded_file = st.file_uploader(
+    "Upload an Image or Video",
+    type=["png", "jpg", "jpeg", "bmp", "mp4", "avi", "mov", "mkv"]
+)
+
+if uploaded_file is not None:
+    input_name = uploaded_file.name
+    file_type = get_file_type(input_name)
+
+    if file_type is None:
+        st.error("Unsupported file type.")
+        st.stop()
+
+    # =========================
+    # ✅ IMAGE FLOW
+    # =========================
+    if file_type == "image":
+        img_bgr = read_uploaded_image(uploaded_file)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -165,29 +175,29 @@ if mode == "Image":
 
         st.success(f"Done ✅  Free={free}, Busy={busy}, Partial={partial}")
 
+        out_path = os.path.join(OUTPUT_DIR, "annotated.png")
         if save_outputs:
-            out_path = os.path.join(OUTPUT_DIR, "annotated.png")
             save_image(out_path, annotated_bgr)
             save_state("image", input_name, free, busy, partial, out_path)
             st.info(f"Saved annotated image to: {out_path}")
-            st.download_button("Download annotated image",
-                               data=cv2.imencode(".png", annotated_bgr)[1].tobytes(),
-                               file_name="annotated.png",
-                               mime="image/png")
 
-# =========================
-# ✅ Video Mode
-# =========================
-else:
-    uploaded_vid = st.file_uploader("Upload a video", type=["mp4", "avi", "mov", "mkv"])
-    if uploaded_vid is not None:
-        input_name = uploaded_vid.name
+        st.download_button(
+            "Download annotated image",
+            data=cv2.imencode(".png", annotated_bgr)[1].tobytes(),
+            file_name="annotated.png",
+            mime="image/png"
+        )
 
+    # =========================
+    # ✅ VIDEO FLOW (FULL VIDEO + STREAM WRITING)
+    # =========================
+    else:
         # Save uploaded video temporarily
-        temp_video_path = os.path.join(OUTPUT_DIR, "temp_upload_video.mp4")
+        temp_video_path = os.path.join(OUTPUT_DIR, f"temp_{int(time.time())}_{input_name}")
         with open(temp_video_path, "wb") as f:
-            f.write(uploaded_vid.read())
+            f.write(uploaded_file.read())
 
+        st.subheader("Original Video")
         st.video(temp_video_path)
 
         cap = cv2.VideoCapture(temp_video_path)
@@ -199,16 +209,22 @@ else:
         if fps is None or fps <= 0:
             fps = 25
 
-        st.warning("Processing video... this may take some time depending on video length.")
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
 
-        frames_out = []
-        last_counts = (0, 0, 0)
+        st.warning("Processing full video... this may take some time.")
 
-        frame_limit = st.sidebar.number_input("Max frames to process (0 = all)", min_value=0, max_value=5000, value=300)
+        # Output writer (write frame-by-frame)
+        out_video_path = os.path.join(OUTPUT_DIR, "annotated.mp4")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(out_video_path, fourcc, fps, (width, height))
 
-        frame_count = 0
         progress = st.progress(0)
         start_time = time.time()
+
+        last_counts = (0, 0, 0)
+        frame_count = 0
 
         while True:
             ret, frame = cap.read()
@@ -216,37 +232,39 @@ else:
                 break
 
             frame_count += 1
-            if frame_limit and frame_count > frame_limit:
-                break
 
             results = model.predict(frame, conf=conf_threshold, verbose=False)[0]
             annotated, free, busy, partial = annotate_frame(frame.copy(), results, names, conf_threshold)
             last_counts = (free, busy, partial)
-            frames_out.append(annotated)
 
-            if frame_count % 10 == 0:
-                progress.progress(min(frame_count / max(1, frame_limit if frame_limit else frame_count), 1.0))
+            out.write(annotated)
+
+            # Update progress
+            if total_frames > 0 and frame_count % 5 == 0:
+                progress.progress(min(frame_count / total_frames, 1.0))
 
         cap.release()
+        out.release()
         progress.progress(1.0)
 
         free, busy, partial = last_counts
-        st.success(f"Done ✅ Free={free}, Busy={busy}, Partial={partial}")
+        st.success(f"Done ✅  Free={free}, Busy={busy}, Partial={partial}")
         st.info(f"Processed {frame_count} frames in {time.time() - start_time:.1f} seconds.")
 
         if save_outputs:
-            out_video_path = os.path.join(OUTPUT_DIR, "annotated.mp4")
-            ok = save_video_from_frames(out_video_path, frames_out, fps=fps)
-            if ok:
-                save_state("video", input_name, free, busy, partial, out_video_path)
-                st.info(f"Saved annotated video to: {out_video_path}")
+            save_state("video", input_name, free, busy, partial, out_video_path)
+            st.info(f"Saved annotated video to: {out_video_path}")
 
-                with open(out_video_path, "rb") as f:
-                    st.download_button(
-                        "Download annotated video",
-                        data=f.read(),
-                        file_name="annotated.mp4",
-                        mime="video/mp4"
-                    )
-            else:
-                st.error("Failed to save output video.")
+        st.subheader("Annotated Video")
+        st.video(out_video_path)
+
+        with open(out_video_path, "rb") as f:
+            st.download_button(
+                "Download annotated video",
+                data=f.read(),
+                file_name="annotated.mp4",
+                mime="video/mp4"
+            )
+
+else:
+    st.info("⬆️ Upload an image or a video to start detection.")
