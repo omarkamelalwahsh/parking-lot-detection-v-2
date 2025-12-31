@@ -1,0 +1,4 @@
+train: C:/Users/User/Parking Lot Dataset/images
+val: C:/Users/User/Parking Lot Dataset/images  # أو اعمل split لو عايز
+nc: 3
+names: ['free_parking_space', 'not_free_parking_space', 'partially_free_parking_space']
