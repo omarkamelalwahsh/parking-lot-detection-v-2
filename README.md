@@ -166,7 +166,7 @@ Saved to `outputs/state.json` after each run:
 - `timestamp`: ISO format datetime
 - `mode`: "image" or "video"
 - `input_path`: Original input file path
-- `free_count/busy_count/partial_count`: Slot counts
+- `free_count/busy_count`: Slot counts
 - `output_media_path`: Path to annotated file
 
 
