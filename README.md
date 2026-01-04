@@ -58,28 +58,7 @@ This project goes beyond model training — it provides a complete **ML delivery
 ## 🏗️ System Architecture
 
 ### High-Level Pipeline
-[Upload / Input Path]
-|
-v
-[Load YOLOv8 Model]
-|
-v
-[Read Image / Video Frames]
-|
-v
-[YOLO Inference → boxes + class + confidence]
-|
-v
-[Filter by Confidence Threshold]
-|
-v
-[Count classes + Draw bounding boxes]
-|
-v
-[Save annotated media + write state.json]
 
-yaml
-نسخ الكود
 
 ### What the model returns (YOLO Output)
 - `xyxy` bounding box coordinates  
@@ -113,8 +92,6 @@ parking-lot-detection-v-2/
 ├── requirements.txt # Dependencies (streamlit + ultralytics + opencv)
 └── README.md
 
-yaml
-نسخ الكود
 
 ---
 
@@ -123,12 +100,15 @@ yaml
 ### 1) Install dependencies
 ```bash
 pip install -r requirements.txt
+
+
 Streamlit Cloud & Linux environments require opencv-python-headless (already included).
 
+
 2) Run the Web App (Streamlit Dashboard)
-bash
-نسخ الكود
 streamlit run dashboard/app.py
+
+
 ✅ App features:
 
 Upload image/video from laptop
@@ -143,20 +123,19 @@ Automatically logs results in outputs/state.json
 
 3) Run CLI Inference (Automation / Testing)
 Image inference
-bash
-نسخ الكود
 python src/run_app.py --input_path "path/to/image.png" --conf 0.5
+
 Video inference
-bash
-نسخ الكود
 python src/run_app.py --input_path "path/to/video.mp4" --conf 0.5 --save_video
+
+
 Optional:
 
-bash
-نسخ الكود
 python src/run_app.py --input_path "video.mp4" --conf 0.5 --show
+
 🧾 Output Format (Reproducibility)
 Annotated outputs
+
 Saved in:
 
 outputs/annotated.png
@@ -164,10 +143,9 @@ outputs/annotated.png
 outputs/annotated.mp4
 
 Structured inference log
+
 outputs/state.json includes:
 
-json
-نسخ الكود
 {
   "timestamp": "YYYY-MM-DD HH:MM:SS",
   "mode": "image/video",
@@ -177,6 +155,8 @@ json
   "partial_count": 1,
   "output_media_path": "outputs/annotated.mp4"
 }
+
+
 This is useful for:
 
 auditing inference runs
@@ -186,8 +166,6 @@ debugging unstable detection
 future integration with a backend/database
 
 🧠 Model Training (YOLOv8)
-python
-نسخ الكود
 from ultralytics import YOLO
 
 model = YOLO("yolov8n.pt")
@@ -199,6 +177,7 @@ model.train(
     batch=8,
     name="parking_lot_detector"
 )
+
 📊 Model Performance (Validation)
 Class	mAP50	mAP50-95
 free_parking_space	0.986	0.921
@@ -209,64 +188,3 @@ Dataset size: 30 images
 Total labeled slots: 903
 
 The partially-free class is significantly harder because it has fewer samples and higher visual similarity.
-
-⚠️ Known Issues (Real-World Challenges)
-1) False Positives (e.g., trees/shadows detected as slots)
-Why?
-
-Dataset is limited
-
-Missing hard negative examples (trees, shadows, sidewalks)
-
-Visual patterns overlap with slot textures
-
-Fix options
-
-Increase confidence threshold
-
-ROI masking (restrict detection to parking area only)
-
-Hard Negative Mining + retraining
-
-2) Flickering in video (counts change frame-to-frame)
-Why?
-
-Confidence varies across frames due to blur + lighting changes
-
-Predictions close to threshold may appear/disappear
-
-Fix options
-
-Temporal smoothing (majority vote over last N frames)
-
-Add tracking (ByteTrack/DeepSORT) to stabilize occupancy
-
-3) Double counting (duplicate bounding boxes)
-Why?
-
-Overlapping detections in difficult frames
-
-NMS tuning required
-
-Fix options
-
-IoU-based post-processing deduplication
-
-Tune YOLO NMS IoU threshold
-
-🔮 Roadmap (Future Work)
-Slot-level tracking (ByteTrack / DeepSORT) to stabilize occupancy
-
-ROI polygon masking to eliminate background false detections
-
-Expand dataset for partially-free class
-
-Export model to ONNX/TensorRT for optimized deployment
-
-👤 Author
-Omar Kamel Al Wahsh
-
-GitHub: https://github.com/omarkamelalwahsh
-
-LinkedIn: https://www.linkedin.com/in/omar-alwahsh-32492a199
-
