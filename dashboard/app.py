@@ -2,12 +2,14 @@ import os
 import json
 import time
 from datetime import datetime
+import subprocess
 
 import streamlit as st
 import numpy as np
 import cv2
 from PIL import Image
 from ultralytics import YOLO
+import imageio_ffmpeg
 
 
 # =========================
@@ -114,6 +116,25 @@ def get_file_type(filename: str):
     return None
 
 
+# ✅ Convert OpenCV mp4 → Web-compatible H264 mp4
+def convert_to_h264(input_path, output_path):
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-i", input_path,
+        "-vcodec", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "fast",
+        "-crf", "23",
+        output_path
+    ]
+
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return output_path
+
+
 # =========================
 # ✅ Streamlit UI
 # =========================
@@ -155,7 +176,7 @@ if uploaded_file is not None:
         st.stop()
 
     # =========================
-    # ✅ IMAGE FLOW
+    # ✅ IMAGE FLOW (NO CHANGE)
     # =========================
     if file_type == "image":
         img_bgr = read_uploaded_image(uploaded_file)
@@ -165,7 +186,6 @@ if uploaded_file is not None:
             st.subheader("Original")
             st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), use_column_width=True)
 
-        # YOLO inference
         results = model.predict(img_bgr, conf=conf_threshold, verbose=False)[0]
         annotated_bgr, free, busy, partial = annotate_frame(img_bgr.copy(), results, names, conf_threshold)
 
@@ -189,10 +209,9 @@ if uploaded_file is not None:
         )
 
     # =========================
-    # ✅ VIDEO FLOW (FULL VIDEO + STREAM WRITING)
+    # ✅ VIDEO FLOW (FIXED FOR STREAMLIT PLAYBACK)
     # =========================
     else:
-        # Save uploaded video temporarily
         temp_video_path = os.path.join(OUTPUT_DIR, f"temp_{int(time.time())}_{input_name}")
         with open(temp_video_path, "wb") as f:
             f.write(uploaded_file.read())
@@ -215,10 +234,17 @@ if uploaded_file is not None:
 
         st.warning("Processing full video... this may take some time.")
 
-        # Output writer (write frame-by-frame)
-        out_video_path = os.path.join(OUTPUT_DIR, "annotated.mp4")
+        # Save raw OpenCV output first
+        raw_out_path = os.path.join(OUTPUT_DIR, "annotated_raw.mp4")
+        final_out_path = os.path.join(OUTPUT_DIR, "annotated.mp4")
+
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(out_video_path, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(raw_out_path, fourcc, fps, (width, height))
+
+        if not out.isOpened():
+            st.error("VideoWriter failed to open. Codec not supported.")
+            cap.release()
+            st.stop()
 
         progress = st.progress(0)
         start_time = time.time()
@@ -239,7 +265,6 @@ if uploaded_file is not None:
 
             out.write(annotated)
 
-            # Update progress
             if total_frames > 0 and frame_count % 5 == 0:
                 progress.progress(min(frame_count / total_frames, 1.0))
 
@@ -247,18 +272,22 @@ if uploaded_file is not None:
         out.release()
         progress.progress(1.0)
 
+        # ✅ Convert to H264 so browser can play it
+        st.info("Converting video to web-compatible format (H.264)...")
+        convert_to_h264(raw_out_path, final_out_path)
+
         free, busy, partial = last_counts
         st.success(f"Done ✅  Free={free}, Busy={busy}, Partial={partial}")
         st.info(f"Processed {frame_count} frames in {time.time() - start_time:.1f} seconds.")
 
         if save_outputs:
-            save_state("video", input_name, free, busy, partial, out_video_path)
-            st.info(f"Saved annotated video to: {out_video_path}")
+            save_state("video", input_name, free, busy, partial, final_out_path)
+            st.info(f"Saved annotated video to: {final_out_path}")
 
         st.subheader("Annotated Video")
-        st.video(out_video_path)
+        st.video(final_out_path)
 
-        with open(out_video_path, "rb") as f:
+        with open(final_out_path, "rb") as f:
             st.download_button(
                 "Download annotated video",
                 data=f.read(),
