@@ -3,13 +3,13 @@ import json
 import time
 from datetime import datetime
 import subprocess
+import shutil
 
 import streamlit as st
 import numpy as np
 import cv2
 from PIL import Image
 from ultralytics import YOLO
-import imageio_ffmpeg
 
 
 # =========================
@@ -74,22 +74,36 @@ def annotate_frame(frame_bgr, results, names, conf_threshold):
 
         if label == "free_parking_space":
             free += 1
-            color = (0, 255, 0)
+            color = (0, 255, 0)  # green
         elif label == "not_free_parking_space":
             busy += 1
-            color = (0, 0, 255)
+            color = (0, 0, 255)  # red
         else:
-            # ignore any other class
-            continue
+            continue  # ignore any other class
 
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame_bgr, f"{label} {conf:.2f}", (x1, max(15, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.putText(
+            frame_bgr,
+            f"{label} {conf:.2f}",
+            (x1, max(15, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+        )
 
     info_text = f"Free: {free} | Busy: {busy}"
-    cv2.putText(frame_bgr, info_text, (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(
+        frame_bgr,
+        info_text,
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
 
     return frame_bgr, free, busy
 
@@ -115,9 +129,30 @@ def get_file_type(filename: str):
     return None
 
 
-# ✅ Convert OpenCV mp4 → Web-compatible H264 mp4
+# ✅ Auto Confidence helper
+def compute_auto_conf(results_list, margin=0.10, default=0.50):
+    confs = []
+    for res in results_list:
+        if res is None or res.boxes is None:
+            continue
+        for box in res.boxes:
+            confs.append(float(box.conf[0]))
+
+    if len(confs) == 0:
+        return default
+
+    med = float(np.median(confs))
+    auto_conf = max(0.05, min(0.95, med - margin))
+    return auto_conf
+
+
+# ✅ Convert MP4 to H264 (browser playable)
 def convert_to_h264(input_path, output_path):
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        # ffmpeg not found, return raw output
+        st.warning("FFmpeg not found. Video will be saved as raw MP4 (may not play in browser).")
+        return input_path
 
     cmd = [
         ffmpeg_path,
@@ -132,23 +167,6 @@ def convert_to_h264(input_path, output_path):
 
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return output_path
-
-
-# ✅ Auto Confidence helper
-def compute_auto_conf(results_list, margin=0.10, default=0.5):
-    confs = []
-    for res in results_list:
-        if res is None or res.boxes is None:
-            continue
-        for box in res.boxes:
-            confs.append(float(box.conf[0]))
-
-    if len(confs) == 0:
-        return default
-
-    med = float(np.median(confs))
-    auto_conf = max(0.05, min(0.95, med - margin))
-    return auto_conf
 
 
 # =========================
@@ -166,6 +184,7 @@ if model is None:
 
 names = model.names
 
+
 # =========================
 # ✅ Sidebar Settings
 # =========================
@@ -176,9 +195,10 @@ st.sidebar.subheader("Confidence Threshold")
 conf_mode = st.sidebar.radio(
     "Choose mode:",
     ["Manual", "Auto (recommended)"],
-    index=0
+    index=1
 )
 
+# ✅ Manual slider يظهر فقط في manual
 manual_conf = None
 if conf_mode == "Manual":
     manual_conf = st.sidebar.slider(
@@ -186,22 +206,16 @@ if conf_mode == "Manual":
         0.05, 0.95, 0.50, 0.05
     )
 
-auto_margin = None
-auto_sample_frames = None
-if conf_mode != "Manual":
-    auto_margin = st.sidebar.slider(
-        "Auto margin (safety buffer)",
-        0.00, 0.30, 0.10, 0.01
-    )
-    auto_sample_frames = st.sidebar.number_input(
-        "Auto sampling frames (video)",
-        min_value=5, max_value=200, value=30
-    )
+# ✅ Auto settings ثابتة (مش ظاهرة للمستخدم)
+AUTO_MARGIN = 0.10
+AUTO_SAMPLE_FRAMES = 30
+AUTO_DEFAULT = 0.50
 
 save_outputs = st.sidebar.checkbox("Save outputs to outputs/", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.info("Upload an image or a video. The app will detect the file type automatically.")
+
 
 # =========================
 # ✅ ONE Upload (Image or Video)
@@ -229,7 +243,11 @@ if uploaded_file is not None:
             conf_threshold = manual_conf
         else:
             temp_res = model.predict(img_bgr, conf=0.05, verbose=False)[0]
-            conf_threshold = compute_auto_conf([temp_res], margin=auto_margin, default=0.50)
+            conf_threshold = compute_auto_conf(
+                [temp_res],
+                margin=AUTO_MARGIN,
+                default=AUTO_DEFAULT
+            )
 
         st.info(f"Using confidence threshold = {conf_threshold:.2f}")
 
@@ -275,15 +293,16 @@ if uploaded_file is not None:
             st.error("Could not open uploaded video.")
             st.stop()
 
+        # ✅ Determine confidence threshold
         if conf_mode == "Manual":
             conf_threshold = manual_conf
         else:
-            st.info("Auto mode: sampling frames to compute confidence threshold...")
+            st.info("Auto mode: computing confidence threshold from first frames...")
 
             sample_results = []
             sample_count = 0
 
-            while sample_count < auto_sample_frames:
+            while sample_count < AUTO_SAMPLE_FRAMES:
                 ret, frame = cap.read()
                 if not ret:
                     break
@@ -292,7 +311,12 @@ if uploaded_file is not None:
                 sample_results.append(res)
                 sample_count += 1
 
-            conf_threshold = compute_auto_conf(sample_results, margin=auto_margin, default=0.50)
+            conf_threshold = compute_auto_conf(
+                sample_results,
+                margin=AUTO_MARGIN,
+                default=AUTO_DEFAULT
+            )
+
             st.info(f"Auto confidence threshold computed = {conf_threshold:.2f}")
 
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -344,20 +368,21 @@ if uploaded_file is not None:
         out.release()
         progress.progress(1.0)
 
+        # ✅ Convert to H264 for Streamlit playback
         st.info("Converting video to web-compatible format (H.264)...")
-        convert_to_h264(raw_out_path, final_out_path)
+        playable_path = convert_to_h264(raw_out_path, final_out_path)
 
         free, busy = last_counts
         st.success(f"Done ✅  Free={free}, Busy={busy}")
         st.info(f"Processed {frame_count} frames in {time.time() - start_time:.1f} seconds.")
 
         if save_outputs:
-            save_state("video", input_name, free, busy, final_out_path)
+            save_state("video", input_name, free, busy, playable_path)
 
         st.subheader("Annotated Video")
-        st.video(final_out_path)
+        st.video(playable_path)
 
-        with open(final_out_path, "rb") as f:
+        with open(playable_path, "rb") as f:
             st.download_button(
                 "Download annotated video",
                 data=f.read(),
