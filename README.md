@@ -78,7 +78,6 @@ parking-lot-detection-v-2-main/
 │
 ├── runs/
 │   └── parking_lot_detector/      # Training outputs
-│       ├── args.yaml              # Training arguments
 │       ├── results.csv            # Training results
 │       └── weights/
 │           ├── best.pt            # Best model checkpoint
@@ -94,7 +93,7 @@ parking-lot-detection-v-2-main/
 ## Local Setup & Run Instructions
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - Git
 
 ### Installation
