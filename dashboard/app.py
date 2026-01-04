@@ -40,7 +40,7 @@ def safe_write_json(path, data):
         return False
 
 
-# ✅ UPDATED: state.json بدون Partial
+# ✅ state.json بدون Partial
 def save_state(mode, input_name, free, busy, output_path):
     state = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -60,9 +60,8 @@ def load_model():
     return YOLO(MODEL_PATH)
 
 
-# ✅ UPDATED: annotate_frame بدون Partial
+# ✅ بدون Partial
 def annotate_frame(frame_bgr, results, names, conf_threshold):
-    """Draw YOLO boxes + count classes based on label names."""
     free, busy = 0, 0
 
     for box in results.boxes:
@@ -73,15 +72,14 @@ def annotate_frame(frame_bgr, results, names, conf_threshold):
         cls = int(box.cls[0])
         label = names.get(cls, str(cls))
 
-        # ✅ Only accept Free + Busy
         if label == "free_parking_space":
             free += 1
-            color = (0, 255, 0)  # green
+            color = (0, 255, 0)
         elif label == "not_free_parking_space":
             busy += 1
-            color = (0, 0, 255)  # red
+            color = (0, 0, 255)
         else:
-            # ignore any other class completely (Partial or unknown)
+            # ignore any other class
             continue
 
         x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -136,6 +134,23 @@ def convert_to_h264(input_path, output_path):
     return output_path
 
 
+# ✅ Auto Confidence helper
+def compute_auto_conf(results_list, margin=0.10, default=0.5):
+    confs = []
+    for res in results_list:
+        if res is None or res.boxes is None:
+            continue
+        for box in res.boxes:
+            confs.append(float(box.conf[0]))
+
+    if len(confs) == 0:
+        return default
+
+    med = float(np.median(confs))
+    auto_conf = max(0.05, min(0.95, med - margin))
+    return auto_conf
+
+
 # =========================
 # ✅ Streamlit UI
 # =========================
@@ -147,14 +162,42 @@ ensure_dir(OUTPUT_DIR)
 model = load_model()
 if model is None:
     st.error("Model file not found: models/best.pt")
-    st.info("Please upload best.pt to models/ folder OR provide a download link and load it automatically.")
     st.stop()
 
 names = model.names
 
-# Sidebar settings
+# =========================
+# ✅ Sidebar Settings
+# =========================
 st.sidebar.header("Settings")
-conf_threshold = st.sidebar.slider("Confidence threshold", 0.05, 0.95, 0.5, 0.05)
+
+st.sidebar.subheader("Confidence Threshold")
+
+conf_mode = st.sidebar.radio(
+    "Choose mode:",
+    ["Manual", "Auto (recommended)"],
+    index=0
+)
+
+manual_conf = None
+if conf_mode == "Manual":
+    manual_conf = st.sidebar.slider(
+        "Manual confidence threshold",
+        0.05, 0.95, 0.50, 0.05
+    )
+
+auto_margin = None
+auto_sample_frames = None
+if conf_mode != "Manual":
+    auto_margin = st.sidebar.slider(
+        "Auto margin (safety buffer)",
+        0.00, 0.30, 0.10, 0.01
+    )
+    auto_sample_frames = st.sidebar.number_input(
+        "Auto sampling frames (video)",
+        min_value=5, max_value=200, value=30
+    )
+
 save_outputs = st.sidebar.checkbox("Save outputs to outputs/", value=True)
 
 st.sidebar.markdown("---")
@@ -177,10 +220,18 @@ if uploaded_file is not None:
         st.stop()
 
     # =========================
-    # ✅ IMAGE FLOW (same as before but without Partial)
+    # ✅ IMAGE FLOW
     # =========================
     if file_type == "image":
         img_bgr = read_uploaded_image(uploaded_file)
+
+        if conf_mode == "Manual":
+            conf_threshold = manual_conf
+        else:
+            temp_res = model.predict(img_bgr, conf=0.05, verbose=False)[0]
+            conf_threshold = compute_auto_conf([temp_res], margin=auto_margin, default=0.50)
+
+        st.info(f"Using confidence threshold = {conf_threshold:.2f}")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -200,7 +251,6 @@ if uploaded_file is not None:
         if save_outputs:
             save_image(out_path, annotated_bgr)
             save_state("image", input_name, free, busy, out_path)
-            st.info(f"Saved annotated image to: {out_path}")
 
         st.download_button(
             "Download annotated image",
@@ -210,7 +260,7 @@ if uploaded_file is not None:
         )
 
     # =========================
-    # ✅ VIDEO FLOW (Full + Web Compatible Playback)
+    # ✅ VIDEO FLOW
     # =========================
     else:
         temp_video_path = os.path.join(OUTPUT_DIR, f"temp_{int(time.time())}_{input_name}")
@@ -224,6 +274,28 @@ if uploaded_file is not None:
         if not cap.isOpened():
             st.error("Could not open uploaded video.")
             st.stop()
+
+        if conf_mode == "Manual":
+            conf_threshold = manual_conf
+        else:
+            st.info("Auto mode: sampling frames to compute confidence threshold...")
+
+            sample_results = []
+            sample_count = 0
+
+            while sample_count < auto_sample_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                res = model.predict(frame, conf=0.05, verbose=False)[0]
+                sample_results.append(res)
+                sample_count += 1
+
+            conf_threshold = compute_auto_conf(sample_results, margin=auto_margin, default=0.50)
+            st.info(f"Auto confidence threshold computed = {conf_threshold:.2f}")
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps is None or fps <= 0:
@@ -281,7 +353,6 @@ if uploaded_file is not None:
 
         if save_outputs:
             save_state("video", input_name, free, busy, final_out_path)
-            st.info(f"Saved annotated video to: {final_out_path}")
 
         st.subheader("Annotated Video")
         st.video(final_out_path)
