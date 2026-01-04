@@ -159,7 +159,6 @@ Saved to `outputs/state.json` after each run:
   "input_path": "/path/to/input",
   "free_count": 4,
   "busy_count": 24,
-  "partial_count": 0,
   "output_media_path": "outputs/annotated.png"
 }
 ```
