@@ -171,13 +171,6 @@ Saved to `outputs/state.json` after each run:
 - `free_count/busy_count/partial_count`: Slot counts
 - `output_media_path`: Path to annotated file
 
-## Known Limitations
-
-- **Partial slot detection accuracy**: Low mAP for partially_free_parking_space due to limited training data (30 images).
-- **No object tracking**: Counts may fluctuate in videos due to lack of temporal consistency (no DeepSORT or similar).
-- **CPU-only performance**: Inference is slower on CPU; GPU not utilized in current setup.
-- **Fixed thresholds**: Confidence and IoU thresholds are not adaptive, leading to potential instability in varying conditions.
-- **Dataset size**: Small dataset (903 labeled slots) limits generalization to new environments.
 
 ## Debugging
 
@@ -213,6 +206,6 @@ Saved to `outputs/state.json` after each run:
 
 ## Author
 
-Developed by [Your Name/Team].
+Developed by [omar kamel alwahsh].
 
 For questions or contributions, open an issue or pull request.
