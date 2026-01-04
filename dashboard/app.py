@@ -40,14 +40,14 @@ def safe_write_json(path, data):
         return False
 
 
-def save_state(mode, input_name, free, busy, partial, output_path):
+# ✅ UPDATED: state.json بدون Partial
+def save_state(mode, input_name, free, busy, output_path):
     state = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "mode": mode,
         "input_name": input_name,
         "free_count": free,
         "busy_count": busy,
-        "partial_count": partial,
         "output_media_path": output_path
     }
     safe_write_json(STATE_FILE, state)
@@ -60,9 +60,10 @@ def load_model():
     return YOLO(MODEL_PATH)
 
 
+# ✅ UPDATED: annotate_frame بدون Partial
 def annotate_frame(frame_bgr, results, names, conf_threshold):
     """Draw YOLO boxes + count classes based on label names."""
-    free, busy, partial = 0, 0, 0
+    free, busy = 0, 0
 
     for box in results.boxes:
         conf = float(box.conf[0])
@@ -72,27 +73,27 @@ def annotate_frame(frame_bgr, results, names, conf_threshold):
         cls = int(box.cls[0])
         label = names.get(cls, str(cls))
 
-        # Default: yellow
-        color = (0, 255, 255)
+        # ✅ Only accept Free + Busy
         if label == "free_parking_space":
             free += 1
-            color = (0, 255, 0)
+            color = (0, 255, 0)  # green
         elif label == "not_free_parking_space":
             busy += 1
-            color = (0, 0, 255)
+            color = (0, 0, 255)  # red
         else:
-            partial += 1
+            # ignore any other class completely (Partial or unknown)
+            continue
 
         x1, y1, x2, y2 = map(int, box.xyxy[0])
         cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, 2)
         cv2.putText(frame_bgr, f"{label} {conf:.2f}", (x1, max(15, y1 - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-    info_text = f"Free: {free} | Busy: {busy} | Partial: {partial}"
+    info_text = f"Free: {free} | Busy: {busy}"
     cv2.putText(frame_bgr, info_text, (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
-    return frame_bgr, free, busy, partial
+    return frame_bgr, free, busy
 
 
 def read_uploaded_image(uploaded_file):
@@ -176,7 +177,7 @@ if uploaded_file is not None:
         st.stop()
 
     # =========================
-    # ✅ IMAGE FLOW (NO CHANGE)
+    # ✅ IMAGE FLOW (same as before but without Partial)
     # =========================
     if file_type == "image":
         img_bgr = read_uploaded_image(uploaded_file)
@@ -187,18 +188,18 @@ if uploaded_file is not None:
             st.image(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), use_column_width=True)
 
         results = model.predict(img_bgr, conf=conf_threshold, verbose=False)[0]
-        annotated_bgr, free, busy, partial = annotate_frame(img_bgr.copy(), results, names, conf_threshold)
+        annotated_bgr, free, busy = annotate_frame(img_bgr.copy(), results, names, conf_threshold)
 
         with col2:
             st.subheader("Annotated")
             st.image(cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB), use_column_width=True)
 
-        st.success(f"Done ✅  Free={free}, Busy={busy}, Partial={partial}")
+        st.success(f"Done ✅  Free={free}, Busy={busy}")
 
         out_path = os.path.join(OUTPUT_DIR, "annotated.png")
         if save_outputs:
             save_image(out_path, annotated_bgr)
-            save_state("image", input_name, free, busy, partial, out_path)
+            save_state("image", input_name, free, busy, out_path)
             st.info(f"Saved annotated image to: {out_path}")
 
         st.download_button(
@@ -209,7 +210,7 @@ if uploaded_file is not None:
         )
 
     # =========================
-    # ✅ VIDEO FLOW (FIXED FOR STREAMLIT PLAYBACK)
+    # ✅ VIDEO FLOW (Full + Web Compatible Playback)
     # =========================
     else:
         temp_video_path = os.path.join(OUTPUT_DIR, f"temp_{int(time.time())}_{input_name}")
@@ -234,7 +235,6 @@ if uploaded_file is not None:
 
         st.warning("Processing full video... this may take some time.")
 
-        # Save raw OpenCV output first
         raw_out_path = os.path.join(OUTPUT_DIR, "annotated_raw.mp4")
         final_out_path = os.path.join(OUTPUT_DIR, "annotated.mp4")
 
@@ -249,7 +249,7 @@ if uploaded_file is not None:
         progress = st.progress(0)
         start_time = time.time()
 
-        last_counts = (0, 0, 0)
+        last_counts = (0, 0)
         frame_count = 0
 
         while True:
@@ -260,8 +260,8 @@ if uploaded_file is not None:
             frame_count += 1
 
             results = model.predict(frame, conf=conf_threshold, verbose=False)[0]
-            annotated, free, busy, partial = annotate_frame(frame.copy(), results, names, conf_threshold)
-            last_counts = (free, busy, partial)
+            annotated, free, busy = annotate_frame(frame.copy(), results, names, conf_threshold)
+            last_counts = (free, busy)
 
             out.write(annotated)
 
@@ -272,16 +272,15 @@ if uploaded_file is not None:
         out.release()
         progress.progress(1.0)
 
-        # ✅ Convert to H264 so browser can play it
         st.info("Converting video to web-compatible format (H.264)...")
         convert_to_h264(raw_out_path, final_out_path)
 
-        free, busy, partial = last_counts
-        st.success(f"Done ✅  Free={free}, Busy={busy}, Partial={partial}")
+        free, busy = last_counts
+        st.success(f"Done ✅  Free={free}, Busy={busy}")
         st.info(f"Processed {frame_count} frames in {time.time() - start_time:.1f} seconds.")
 
         if save_outputs:
-            save_state("video", input_name, free, busy, partial, final_out_path)
+            save_state("video", input_name, free, busy, final_out_path)
             st.info(f"Saved annotated video to: {final_out_path}")
 
         st.subheader("Annotated Video")
